@@ -5,7 +5,7 @@ import Records from './components/Records';
 import Analytics from './components/Analytics';
 import ReturnStation from './components/ReturnStation';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/$/, '');
 
 function App() {
   const [activeTab, setActiveTab] = useState('scanner'); // 'scanner', 'records'

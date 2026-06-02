@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Barcode, Clock, HardDrive, BarChart3, ShieldCheck, Play, ArrowUpRight, ArrowDownRight, Calendar, Video, RefreshCw } from 'lucide-react';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/$/, '');
 
 export default function Analytics() {
   const [records, setRecords] = useState([]);

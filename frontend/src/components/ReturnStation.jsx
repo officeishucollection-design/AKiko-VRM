@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Camera, Barcode, Trash2, RotateCcw, Image as ImageIcon, Video, CheckCircle2, AlertCircle, RefreshCw, Sparkles, Focus, ChevronRight, X } from 'lucide-react';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/$/, '');
 
 const playBeep = (freq = 1000) => {
   try {

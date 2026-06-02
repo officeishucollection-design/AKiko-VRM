@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Search, Calendar, Clock, Play, Download, Trash2, Video, ChevronDown, ListFilter, AlertCircle, RefreshCw, X, FileSpreadsheet, Image as ImageIcon } from 'lucide-react';
 import JSZip from 'jszip';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/$/, '');
 
 export default function Records() {
   const [records, setRecords] = useState([]);

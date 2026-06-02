@@ -77,8 +77,11 @@ app.post('/api/records/presigned-url', async (req, res) => {
     const cleanAwb = awb.trim();
     
     // Check if AWB already exists in MongoDB
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ error: 'Database connection is offline. Please try again later.' });
+    try {
+      await connectDB();
+    } catch (dbErr) {
+      console.error('CORS/DB Handshake Error (Presigned URL):', dbErr);
+      return res.status(503).json({ error: 'Database connection failed: ' + dbErr.message });
     }
     const record = await Record.findOne({ awb: cleanAwb });
     if (record) {
@@ -127,8 +130,11 @@ app.post('/api/records', async (req, res) => {
       return res.status(400).json({ error: 'AWB is required' });
     }
 
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ error: 'Database connection offline. Record metadata could not be saved.' });
+    try {
+      await connectDB();
+    } catch (dbErr) {
+      console.error('CORS/DB Handshake Error (Save Record):', dbErr);
+      return res.status(503).json({ error: 'Database connection failed: ' + dbErr.message });
     }
 
     const recordData = {
@@ -156,8 +162,11 @@ app.get('/api/records', async (req, res) => {
   try {
     const { search, sortBy, limit } = req.query;
     
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ error: 'Database connection is offline.' });
+    try {
+      await connectDB();
+    } catch (dbErr) {
+      console.error('CORS/DB Handshake Error (Get Records):', dbErr);
+      return res.status(503).json({ error: 'Database connection failed: ' + dbErr.message });
     }
 
     let query = {};
@@ -194,8 +203,11 @@ app.delete('/api/records/:awb', async (req, res) => {
   try {
     const awbParam = req.params.awb;
     
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ error: 'Database connection is offline.' });
+    try {
+      await connectDB();
+    } catch (dbErr) {
+      console.error('CORS/DB Handshake Error (Delete Record):', dbErr);
+      return res.status(503).json({ error: 'Database connection failed: ' + dbErr.message });
     }
 
     const recordToDelete = await Record.findOne({ awb: awbParam });

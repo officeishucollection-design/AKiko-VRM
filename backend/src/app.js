@@ -5,6 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { Readable } from 'stream';
+import mongoose from 'mongoose';
 import connectDB from './config/db.js';
 import Record from './models/Record.js';
 import { getUploadPresignedUrl, deleteFromS3 } from './services/s3.js';
@@ -76,21 +77,11 @@ app.post('/api/records/presigned-url', async (req, res) => {
     const cleanAwb = awb.trim();
     
     // Check if AWB already exists in MongoDB
-    let exists = false;
-    try {
-      if (Record.db.readyState === 1) {
-        const record = await Record.findOne({ awb: cleanAwb });
-        exists = !!record;
-      } else {
-        const records = readLocalDb();
-        exists = records.some(r => r.awb.toLowerCase() === cleanAwb.toLowerCase());
-      }
-    } catch (e) {
-      const records = readLocalDb();
-      exists = records.some(r => r.awb.toLowerCase() === cleanAwb.toLowerCase());
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ error: 'Database connection is offline. Please try again later.' });
     }
-
-    if (exists) {
+    const record = await Record.findOne({ awb: cleanAwb });
+    if (record) {
       return res.status(400).json({ error: `AWB ${cleanAwb} already has a recording.` });
     }
 
@@ -136,6 +127,10 @@ app.post('/api/records', async (req, res) => {
       return res.status(400).json({ error: 'AWB is required' });
     }
 
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ error: 'Database connection offline. Record metadata could not be saved.' });
+    }
+
     const recordData = {
       awb: awb.trim(),
       videoUrl: videoUrl || null,
@@ -146,35 +141,13 @@ app.post('/api/records', async (req, res) => {
       isMock: !!isMock
     };
 
-    let newRecord;
-    let databaseSaved = false;
-
-    // Try MongoDB
-    try {
-      if (Record.db.readyState === 1) {
-        newRecord = await Record.create(recordData);
-        databaseSaved = true;
-        console.log(`Saved record for AWB ${recordData.awb} to MongoDB.`);
-      }
-    } catch (dbError) {
-      console.warn('Could not write to MongoDB, falling back to local database file.', dbError.message);
-    }
-
-    // JSON fallback
-    if (!databaseSaved) {
-      const records = readLocalDb();
-      // Remove any existing duplicate just in case
-      const filtered = records.filter(r => r.awb.toLowerCase() !== recordData.awb.toLowerCase());
-      filtered.push(recordData);
-      writeLocalDb(filtered);
-      newRecord = recordData;
-      console.log(`Saved record for AWB ${recordData.awb} to local JSON DB.`);
-    }
+    const newRecord = await Record.create(recordData);
+    console.log(`Saved record for AWB ${recordData.awb} to MongoDB.`);
 
     res.status(201).json({ success: true, record: newRecord });
   } catch (error) {
     console.error('Error saving record:', error);
-    res.status(500).json({ error: 'Failed to save record metadata' });
+    res.status(500).json({ error: 'Failed to save record metadata: ' + error.message });
   }
 });
 
@@ -183,79 +156,36 @@ app.get('/api/records', async (req, res) => {
   try {
     const { search, sortBy, limit } = req.query;
     
-    let records = [];
-    let isDbOnline = false;
-
-    // Attempt Mongo first
-    try {
-      if (Record.db.readyState === 1) {
-        isDbOnline = true;
-        let query = {};
-        if (search) {
-          query.awb = { $regex: search.trim(), $options: 'i' };
-        }
-        
-        let sortOption = { recordedAt: -1 }; // default
-        if (sortBy === 'date-asc') {
-          sortOption = { recordedAt: 1 };
-        } else if (sortBy === 'awb-asc') {
-          sortOption = { awb: 1 };
-        } else if (sortBy === 'awb-desc') {
-          sortOption = { awb: -1 };
-        } else if (sortBy === 'duration-desc') {
-          sortOption = { duration: -1 };
-        } else if (sortBy === 'duration-asc') {
-          sortOption = { duration: 1 };
-        }
-
-        records = await Record.find(query)
-          .sort(sortOption)
-          .limit(limit ? parseInt(limit) : 100);
-      }
-    } catch (e) {
-      console.warn('Database offline, reading local JSON DB for fetch.');
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ error: 'Database connection is offline.' });
     }
 
-    // Local JSON fallback
-    if (!isDbOnline) {
-      records = readLocalDb();
-      
-      // Filter search
-      if (search) {
-        const queryTerm = search.trim().toLowerCase();
-        records = records.filter(r => r.awb.toLowerCase().includes(queryTerm));
-      }
-      
-      // Sort records
-      records.sort((a, b) => {
-        const dateA = new Date(a.recordedAt);
-        const dateB = new Date(b.recordedAt);
-        
-        if (sortBy === 'date-asc') {
-          return dateA - dateB;
-        } else if (sortBy === 'awb-asc') {
-          return a.awb.localeCompare(b.awb);
-        } else if (sortBy === 'awb-desc') {
-          return b.awb.localeCompare(a.awb);
-        } else if (sortBy === 'duration-desc') {
-          return b.duration - a.duration;
-        } else if (sortBy === 'duration-asc') {
-          return a.duration - b.duration;
-        } else {
-          // date-desc (default)
-          return dateB - dateA;
-        }
-      });
-
-      if (limit) {
-        records = records.slice(0, parseInt(limit));
-      }
+    let query = {};
+    if (search) {
+      query.awb = { $regex: search.trim(), $options: 'i' };
     }
+    
+    let sortOption = { recordedAt: -1 }; // default
+    if (sortBy === 'date-asc') {
+      sortOption = { recordedAt: 1 };
+    } else if (sortBy === 'awb-asc') {
+      sortOption = { awb: 1 };
+    } else if (sortBy === 'awb-desc') {
+      sortOption = { awb: -1 };
+    } else if (sortBy === 'duration-desc') {
+      sortOption = { duration: -1 };
+    } else if (sortBy === 'duration-asc') {
+      sortOption = { duration: 1 };
+    }
+
+    const records = await Record.find(query)
+      .sort(sortOption)
+      .limit(limit ? parseInt(limit) : 100);
 
     res.json(records);
   } catch (error) {
     console.error('Error fetching records:', error);
-    res.status(500).json({ error: 'Failed to fetch records list' });
+    res.status(500).json({ error: 'Failed to fetch records: ' + error.message });
   }
 });
 
@@ -264,81 +194,41 @@ app.delete('/api/records/:awb', async (req, res) => {
   try {
     const awbParam = req.params.awb;
     
-    let deleted = false;
-    let recordToDelete = null;
-
-    // MongoDB
-    try {
-      if (Record.db.readyState === 1) {
-        recordToDelete = await Record.findOne({ awb: awbParam });
-        if (recordToDelete) {
-          // Delete from S3/Local S3 wrapper
-          await deleteFromS3(recordToDelete.videoUrl);
-          
-          // If it was mock local storage, delete the file from the local disk
-          if (recordToDelete.isMock) {
-            if (recordToDelete.type === 'return') {
-              const localFolderPath = path.join(uploadsDir, 'return', recordToDelete.awb);
-              if (fs.existsSync(localFolderPath)) {
-                fs.rmSync(localFolderPath, { recursive: true, force: true });
-              }
-            } else {
-              const fileName = path.basename(recordToDelete.videoUrl);
-              const localFilePath = recordToDelete.videoUrl.includes('/order/')
-                ? path.join(uploadsDir, 'order', fileName)
-                : path.join(uploadsDir, fileName);
-              if (fs.existsSync(localFilePath)) {
-                fs.unlinkSync(localFilePath);
-              }
-            }
-          }
-
-          await Record.deleteOne({ awb: awbParam });
-          deleted = true;
-        }
-      }
-    } catch (e) {
-      console.warn('MongoDB offline during delete, falling back to local JSON DB');
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ error: 'Database connection is offline.' });
     }
 
-    // JSON DB fallback
-    if (!deleted) {
-      const records = readLocalDb();
-      recordToDelete = records.find(r => r.awb.toLowerCase() === awbParam.toLowerCase());
-      
-      if (recordToDelete) {
-        // Delete mock local upload
-        if (recordToDelete.isMock) {
-          if (recordToDelete.type === 'return') {
-            const localFolderPath = path.join(uploadsDir, 'return', recordToDelete.awb);
-            if (fs.existsSync(localFolderPath)) {
-              fs.rmSync(localFolderPath, { recursive: true, force: true });
-            }
-          } else {
-            const fileName = path.basename(recordToDelete.videoUrl);
-            const localFilePath = recordToDelete.videoUrl.includes('/order/')
-              ? path.join(uploadsDir, 'order', fileName)
-              : path.join(uploadsDir, fileName);
-            if (fs.existsSync(localFilePath)) {
-              fs.unlinkSync(localFilePath);
-            }
-          }
-        }
-
-        const filtered = records.filter(r => r.awb.toLowerCase() !== awbParam.toLowerCase());
-        writeLocalDb(filtered);
-        deleted = true;
-      }
-    }
-
-    if (!deleted) {
+    const recordToDelete = await Record.findOne({ awb: awbParam });
+    if (!recordToDelete) {
       return res.status(404).json({ error: 'Record not found' });
     }
 
+    // Delete from S3/Local S3 wrapper
+    await deleteFromS3(recordToDelete.videoUrl);
+    
+    // If it was mock local storage, delete the file from the local disk
+    if (recordToDelete.isMock) {
+      if (recordToDelete.type === 'return') {
+        const localFolderPath = path.join(uploadsDir, 'return', recordToDelete.awb);
+        if (fs.existsSync(localFolderPath)) {
+          fs.rmSync(localFolderPath, { recursive: true, force: true });
+        }
+      } else {
+        const fileName = path.basename(recordToDelete.videoUrl);
+        const localFilePath = recordToDelete.videoUrl.includes('/order/')
+          ? path.join(uploadsDir, 'order', fileName)
+          : path.join(uploadsDir, fileName);
+        if (fs.existsSync(localFilePath)) {
+          fs.unlinkSync(localFilePath);
+        }
+      }
+    }
+
+    await Record.deleteOne({ awb: awbParam });
     res.json({ success: true, message: `Successfully deleted AWB ${awbParam}` });
   } catch (error) {
     console.error('Error deleting record:', error);
-    res.status(500).json({ error: 'Failed to delete record' });
+    res.status(500).json({ error: 'Failed to delete record: ' + error.message });
   }
 });
 

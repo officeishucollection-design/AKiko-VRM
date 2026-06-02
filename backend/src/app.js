@@ -14,10 +14,14 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Initialize folders
-const uploadsDir = path.join(__dirname, '..', 'uploads');
+// Initialize folders (use writeable /tmp directory when running in Vercel serverless context)
+const uploadsDir = process.env.VERCEL
+  ? path.join('/tmp', 'uploads')
+  : path.join(__dirname, '..', 'uploads');
+
 const orderDir = path.join(uploadsDir, 'order');
 const returnDir = path.join(uploadsDir, 'return');
+
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
@@ -28,7 +32,10 @@ if (!fs.existsSync(returnDir)) {
   fs.mkdirSync(returnDir, { recursive: true });
 }
 
-const localDbPath = path.join(__dirname, '..', 'local_db.json');
+const localDbPath = process.env.VERCEL
+  ? path.join('/tmp', 'local_db.json')
+  : path.join(__dirname, '..', 'local_db.json');
+
 if (!fs.existsSync(localDbPath)) {
   fs.writeFileSync(localDbPath, JSON.stringify([], null, 2));
 }

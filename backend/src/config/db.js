@@ -4,12 +4,14 @@ import dns from 'dns';
 
 dotenv.config();
 
-// Override default system DNS resolver with fast public DNS to bypass local router lookup timeouts
-try {
-  dns.setServers(['8.8.8.8', '1.1.1.1']);
-  console.log('DNS resolvers overridden with Google and Cloudflare DNS to ensure fast MongoDB Atlas lookups.');
-} catch (dnsErr) {
-  console.warn('Unable to override DNS servers:', dnsErr.message);
+// Override default system DNS resolver with fast public DNS to bypass local router lookup timeouts (disabled on Vercel)
+if (!process.env.VERCEL) {
+  try {
+    dns.setServers(['8.8.8.8', '1.1.1.1']);
+    console.log('DNS resolvers overridden with Google and Cloudflare DNS to ensure fast MongoDB Atlas lookups.');
+  } catch (dnsErr) {
+    console.warn('Unable to override DNS servers:', dnsErr.message);
+  }
 }
 
 const connectDB = async () => {

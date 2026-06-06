@@ -48,3 +48,8 @@
   box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(99, 102, 241, 0.05);
   transform: translateY(-2px);
 }
+
+/* Hide browser-injected speed controllers (e.g. from Video Speed Controller extension) on previews */
+.vsc-controller {
+  display: none !important;
+}

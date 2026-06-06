@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Calendar, Clock, Play, Download, Trash2, Video, ChevronDown, ListFilter, AlertCircle, RefreshCw, X, FileSpreadsheet, Image as ImageIcon } from 'lucide-react';
+import { Search, Calendar, Clock, Play, Download, Trash2, Video, ChevronDown, ListFilter, AlertCircle, RefreshCw, X, FileSpreadsheet, Image as ImageIcon, ChevronLeft, ChevronRight } from 'lucide-react';
 import JSZip from 'jszip';
 
 const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/$/, '');
 
-export default function Records() {
+export default function Records({ user }) {
   const [records, setRecords] = useState([]);
   const [activeTab, setActiveTab] = useState('order'); // order, return
   const [loading, setLoading] = useState(true);
@@ -26,6 +26,18 @@ export default function Records() {
   const [minDuration, setMinDuration] = useState('');
   const [maxDuration, setMaxDuration] = useState('');
   const [showFilters, setShowFilters] = useState(false);
+
+  // Pagination states
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(9); // default 9
+
+  // Reset pagination on filter changes
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setCurrentPage(1);
+    }, 0);
+    return () => clearTimeout(t);
+  }, [search, sortBy, activeTab, datePreset, startDate, endDate, minDuration, maxDuration]);
 
   const fetchRecords = async () => {
     try {
@@ -155,9 +167,20 @@ export default function Records() {
 
   const filteredRecords = getFilteredRecords();
 
+  const totalPages = itemsPerPage === -1 ? 1 : Math.ceil(filteredRecords.length / itemsPerPage);
+  const safeCurrentPage = itemsPerPage === -1 ? 1 : Math.min(currentPage, Math.max(1, totalPages));
+  const indexOfLastItem = safeCurrentPage * itemsPerPage;
+  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
+  const currentItems = itemsPerPage === -1 
+    ? filteredRecords 
+    : filteredRecords.slice((safeCurrentPage - 1) * itemsPerPage, safeCurrentPage * itemsPerPage);
+
   // Reset selection on tab switch
   useEffect(() => {
-    setSelectedAwbs([]);
+    const t = setTimeout(() => {
+      setSelectedAwbs([]);
+    }, 0);
+    return () => clearTimeout(t);
   }, [activeTab]);
 
   // Export to Excel-compatible CSV file
@@ -645,14 +668,30 @@ export default function Records() {
 
           {/* Records Cards Grid */}
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredRecords.map((record) => (
+            {currentItems.map((record) => (
               <div 
                 key={record.awb} 
                 className="glass-card rounded-2xl overflow-hidden flex flex-col border border-white/5 relative group animate-scale-up"
               >
                 {/* Media Card Preview */}
                 <div className="relative aspect-video w-full bg-slate-900 overflow-hidden border-b border-white/5">
-                  <div className="absolute inset-0 bg-gradient-to-tr from-slate-900 to-indigo-950/20 flex flex-col justify-between p-3 select-none">
+                  {record.videoUrl && (
+                    <video
+                      src={record.videoUrl}
+                      preload="metadata"
+                      className="absolute inset-0 w-full h-full object-cover opacity-50 group-hover:opacity-70 transition-opacity pointer-events-none"
+                      muted
+                      playsInline
+                    />
+                  )}
+                  {!record.videoUrl && record.photos && record.photos.length > 0 && (
+                    <img
+                      src={record.photos[0]}
+                      className="absolute inset-0 w-full h-full object-cover opacity-50 group-hover:opacity-70 transition-opacity pointer-events-none"
+                      alt=""
+                    />
+                  )}
+                  <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-transparent to-slate-950/80 flex flex-col justify-between p-3 select-none">
                     <div className="flex justify-between items-center w-full pointer-events-auto">
                       <input
                         type="checkbox"
@@ -744,7 +783,7 @@ export default function Records() {
                 </div>
 
                 {/* Actions Grid */}
-                <div className="grid grid-cols-3 gap-2 pt-2 border-t border-white/5">
+                <div className={`grid ${user?.role === 'admin' ? 'grid-cols-3' : 'grid-cols-2'} gap-2 pt-2 border-t border-white/5`}>
                   <button
                     onClick={() => setActiveVideo({ awb: record.awb, url: record.videoUrl })}
                     disabled={!record.videoUrl}
@@ -787,18 +826,105 @@ export default function Records() {
                     </a>
                   )}
                   
-                  <button
-                    onClick={() => handleDelete(record.awb)}
-                    className="py-2 bg-red-950/20 hover:bg-red-600 border border-red-500/20 hover:border-red-600 text-red-400 hover:text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    Delete
-                  </button>
+                  {user?.role === 'admin' && (
+                    <button
+                      onClick={() => handleDelete(record.awb)}
+                      className="py-2 bg-red-950/20 hover:bg-red-600 border border-red-500/20 hover:border-red-600 text-red-400 hover:text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Delete
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
           ))}
         </div>
+
+        {/* Pagination Controls */}
+        {filteredRecords.length > 0 && (totalPages > 1 || itemsPerPage !== 9) && (
+          <div className="flex flex-col sm:flex-row items-center justify-between pt-6 border-t border-white/5 gap-4">
+            <div className="text-xs text-slate-400">
+              Showing <span className="font-semibold text-white">
+                {itemsPerPage === -1 ? 1 : indexOfFirstItem + 1}
+              </span> to{' '}
+              <span className="font-semibold text-white">
+                {itemsPerPage === -1 ? filteredRecords.length : Math.min(indexOfLastItem, filteredRecords.length)}
+              </span>{' '}
+              of <span className="font-semibold text-white">{filteredRecords.length}</span> records
+            </div>
+            
+            {itemsPerPage !== -1 && totalPages > 1 && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                  disabled={safeCurrentPage === 1}
+                  className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-slate-800 text-slate-350 hover:text-white rounded-lg border border-slate-750 transition-colors cursor-pointer disabled:cursor-not-allowed"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                
+                {(() => {
+                  const pages = [];
+                  const maxVisiblePages = 5;
+                  if (totalPages <= maxVisiblePages) {
+                    for (let i = 1; i <= totalPages; i++) pages.push(i);
+                  } else {
+                    let start = Math.max(1, safeCurrentPage - 2);
+                    let end = Math.min(totalPages, safeCurrentPage + 2);
+                    if (start === 1) {
+                      end = maxVisiblePages;
+                    } else if (end === totalPages) {
+                      start = totalPages - maxVisiblePages + 1;
+                    }
+                    for (let i = start; i <= end; i++) pages.push(i);
+                  }
+                  return pages.map(pageNum => (
+                    <button
+                      key={pageNum}
+                      onClick={() => setCurrentPage(pageNum)}
+                      className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all border ${
+                        safeCurrentPage === pageNum
+                          ? 'bg-brand-600 text-white border-brand-500 shadow-md shadow-brand-500/10'
+                          : 'bg-slate-800/40 border-slate-700/60 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  ));
+                })()}
+                
+                <button
+                  onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                  disabled={safeCurrentPage === totalPages}
+                  className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-slate-800 text-slate-350 hover:text-white rounded-lg border border-slate-750 transition-colors cursor-pointer disabled:cursor-not-allowed"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 text-xs text-slate-400">
+              <span>Show:</span>
+              <div className="relative">
+                <select
+                  value={itemsPerPage}
+                  onChange={(e) => {
+                    setItemsPerPage(parseInt(e.target.value));
+                    setCurrentPage(1);
+                  }}
+                  className="bg-dark-900 border border-slate-700 rounded-lg pl-2 pr-6 py-1 text-xs text-white focus:outline-none focus:border-brand-500 appearance-none cursor-pointer"
+                >
+                  <option value={9}>9 / page</option>
+                  <option value={18}>18 / page</option>
+                  <option value={36}>36 / page</option>
+                  <option value={-1}>All</option>
+                </select>
+                <ChevronDown className="w-3.5 h-3.5 text-slate-500 absolute right-1.5 top-1 pointer-events-none" />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
       )}
 

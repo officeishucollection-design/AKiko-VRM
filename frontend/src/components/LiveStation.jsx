@@ -41,6 +41,7 @@ export default function LiveStation({ active }) {
   // Refs for tracking mutable variables inside async callbacks safely
   const currentAwbRef = useRef(null);
   const durationRef = useRef(null);
+  const recordingStartTimeRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
   const timerRef = useRef(null);
@@ -126,6 +127,7 @@ export default function LiveStation({ active }) {
     setCurrentAwb(awb);
     setDuration(0);
     durationRef.current = 0;
+    recordingStartTimeRef.current = Date.now();
 
     try {
       let mimeType = 'video/webm;codecs=vp9,opus';
@@ -145,7 +147,7 @@ export default function LiveStation({ active }) {
       recorder.onstop = () => {
         const videoBlob = new Blob(chunksRef.current, { type: mimeType });
         const stoppedAwb = awb;
-        const stoppedDuration = durationRef.current;
+        const stoppedDuration = Math.max(1, durationRef.current || 0);
         
         triggerBackgroundUpload(stoppedAwb, videoBlob, stoppedDuration);
       };
@@ -155,11 +157,9 @@ export default function LiveStation({ active }) {
       // Set duration timer
       if (timerRef.current) clearInterval(timerRef.current);
       timerRef.current = setInterval(() => {
-        setDuration(prev => {
-          const next = prev + 1;
-          durationRef.current = next;
-          return next;
-        });
+        const elapsed = Math.round((Date.now() - recordingStartTimeRef.current) / 1000);
+        setDuration(elapsed);
+        durationRef.current = elapsed;
       }, 1000);
 
     } catch (err) {
@@ -175,6 +175,11 @@ export default function LiveStation({ active }) {
       timerRef.current = null;
     }
     
+    if (recordingStartTimeRef.current) {
+      const elapsed = Math.round((Date.now() - recordingStartTimeRef.current) / 1000);
+      durationRef.current = elapsed;
+    }
+    
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       mediaRecorderRef.current.stop();
     }
@@ -185,6 +190,11 @@ export default function LiveStation({ active }) {
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
+    }
+    
+    if (recordingStartTimeRef.current) {
+      const elapsed = Math.round((Date.now() - recordingStartTimeRef.current) / 1000);
+      durationRef.current = elapsed;
     }
     
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {

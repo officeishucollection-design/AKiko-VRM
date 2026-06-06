@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, Barcode, Trash2, RotateCcw, Image as ImageIcon, Video, CheckCircle2, AlertCircle, RefreshCw, Sparkles, Focus, ChevronRight, X } from 'lucide-react';
+import { Camera, Barcode, Trash2, RotateCcw, Image as ImageIcon, Video, CheckCircle2, AlertCircle, RefreshCw, Sparkles, Focus, ChevronRight, X, ShieldAlert } from 'lucide-react';
 
 const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/$/, '');
 
@@ -52,6 +52,8 @@ export default function ReturnStation({ active }) {
   const videoPreviewRef = useRef(null);
   const inputRef = useRef(null);
   const streamRef = useRef(null);
+  const durationRef = useRef(0);
+  const recordingStartTimeRef = useRef(null);
 
   // Keep input focused automatically
   useEffect(() => {
@@ -70,13 +72,6 @@ export default function ReturnStation({ active }) {
     return () => document.removeEventListener('click', handleGlobalClick);
   }, [active, isSimulating]);
 
-  // Cleanup stream on unmount
-  useEffect(() => {
-    return () => {
-      closeCameraStream();
-    };
-  }, []);
-
   const closeCameraStream = () => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
@@ -88,6 +83,13 @@ export default function ReturnStation({ active }) {
       timerRef.current = null;
     }
   };
+
+  // Cleanup stream on unmount
+  useEffect(() => {
+    return () => {
+      closeCameraStream();
+    };
+  }, []);
 
   // Open camera stream on scan
   const initReturnCamera = async () => {
@@ -144,6 +146,8 @@ export default function ReturnStation({ active }) {
 
     chunksRef.current = [];
     setDuration(0);
+    durationRef.current = 0;
+    recordingStartTimeRef.current = Date.now();
     setVideoBlob(null);
 
     try {
@@ -170,7 +174,9 @@ export default function ReturnStation({ active }) {
       setIsRecording(true);
 
       timerRef.current = setInterval(() => {
-        setDuration(prev => prev + 1);
+        const elapsed = Math.round((Date.now() - recordingStartTimeRef.current) / 1000);
+        setDuration(elapsed);
+        durationRef.current = elapsed;
       }, 1000);
 
       playBeep(900); // start tone
@@ -186,6 +192,12 @@ export default function ReturnStation({ active }) {
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
+    }
+
+    if (recordingStartTimeRef.current) {
+      const elapsed = Math.round((Date.now() - recordingStartTimeRef.current) / 1000);
+      durationRef.current = Math.max(1, elapsed);
+      setDuration(Math.max(1, elapsed));
     }
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
@@ -215,6 +227,8 @@ export default function ReturnStation({ active }) {
     setVideoBlob(null);
     setIsRecording(false);
     setDuration(0);
+    durationRef.current = 0;
+    recordingStartTimeRef.current = null;
     setCameraStatus('standby');
     setUploadStatus('idle');
   };
@@ -368,8 +382,44 @@ export default function ReturnStation({ active }) {
 
     // 1. If currently in a return session and have captured assets:
     // Auto-submit the current return in the background to prevent losing data
-    if (activeAwb && (localPhotos.length > 0 || videoBlob)) {
-      handleSubmitReturn(activeAwb, [...localPhotos], videoBlob, duration);
+    if (activeAwb) {
+      let finalVideoBlob = videoBlob;
+      let finalDuration = duration;
+
+      if (isRecording) {
+        // Stop recording timer first
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
+
+        if (recordingStartTimeRef.current) {
+          finalDuration = Math.max(1, Math.round((Date.now() - recordingStartTimeRef.current) / 1000));
+          durationRef.current = finalDuration;
+          setDuration(finalDuration);
+        }
+
+        setIsRecording(false);
+        playBeep(700); // stop tone
+
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+          // Await media recorder stop to get the blob asynchronously
+          finalVideoBlob = await new Promise((resolve) => {
+            const recorder = mediaRecorderRef.current;
+            const originalOnStop = recorder.onstop;
+            recorder.onstop = () => {
+              if (originalOnStop) originalOnStop();
+              const recordedBlob = new Blob(chunksRef.current, { type: recorder.mimeType });
+              resolve(recordedBlob);
+            };
+            recorder.stop();
+          });
+        }
+      }
+
+      if (localPhotos.length > 0 || finalVideoBlob) {
+        handleSubmitReturn(activeAwb, [...localPhotos], finalVideoBlob, finalDuration);
+      }
     }
 
     // 2. Clear state and start return session for new AWB
@@ -378,6 +428,7 @@ export default function ReturnStation({ active }) {
     setVideoBlob(null);
     setIsRecording(false);
     setDuration(0);
+    durationRef.current = 0;
     setUploadStatus('idle');
     setUploadProgress('');
     setActiveAwb(cleanCode);

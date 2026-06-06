@@ -9,6 +9,8 @@ import mongoose from 'mongoose';
 import connectDB from './config/db.js';
 import Record from './models/Record.js';
 import { getUploadPresignedUrl, deleteFromS3 } from './services/s3.js';
+import authRoutes from './routes/authRoutes.js';
+import { protect, authorize, authorizeStation } from './middleware/auth.js';
 
 dotenv.config();
 
@@ -60,6 +62,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Auth Routes
+app.use('/api/auth', authRoutes);
+
 // Serve static mock uploads
 app.use('/uploads', express.static(uploadsDir));
 
@@ -67,7 +72,7 @@ app.use('/uploads', express.static(uploadsDir));
 connectDB();
 
 // 1. Get Presigned URL for Upload
-app.post('/api/records/presigned-url', async (req, res) => {
+app.post('/api/records/presigned-url', protect, authorize('admin', 'operator'), authorizeStation, async (req, res) => {
   try {
     const { awb, contentType } = req.body;
     if (!awb) {
@@ -122,7 +127,7 @@ app.post('/api/records/presigned-url', async (req, res) => {
 });
 
 // 2. Save Metadata after upload
-app.post('/api/records', async (req, res) => {
+app.post('/api/records', protect, authorize('admin', 'operator'), authorizeStation, async (req, res) => {
   try {
     const { awb, videoUrl, photos, duration, isMock, type } = req.body;
     
@@ -158,7 +163,7 @@ app.post('/api/records', async (req, res) => {
 });
 
 // 3. Get Records with Search and Filters
-app.get('/api/records', async (req, res) => {
+app.get('/api/records', protect, async (req, res) => {
   try {
     const { search, sortBy, limit } = req.query;
     
@@ -199,7 +204,7 @@ app.get('/api/records', async (req, res) => {
 });
 
 // 4. Delete Record
-app.delete('/api/records/:awb', async (req, res) => {
+app.delete('/api/records/:awb', protect, authorize('admin'), async (req, res) => {
   try {
     const awbParam = req.params.awb;
     
@@ -245,7 +250,7 @@ app.delete('/api/records/:awb', async (req, res) => {
 });
 
 // 5. Mock Upload Route (Accepts direct binary upload for testing)
-app.post('/api/records/mock-upload', (req, res) => {
+app.post('/api/records/mock-upload', protect, authorize('admin', 'operator'), authorizeStation, (req, res) => {
   const { key } = req.query;
   if (!key) {
     return res.status(400).json({ error: 'Missing key parameter' });
@@ -292,7 +297,7 @@ app.post('/api/records/mock-upload', (req, res) => {
 });
 
 // 6. Proxy Route to bypass CORS when downloading external media files
-app.get('/api/proxy', async (req, res) => {
+app.get('/api/proxy', protect, async (req, res) => {
   try {
     const { url } = req.query;
     if (!url) {

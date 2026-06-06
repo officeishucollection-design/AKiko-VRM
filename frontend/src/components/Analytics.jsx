@@ -366,7 +366,7 @@ export default function Analytics() {
                   <th className="py-3 px-4">Air Waybill (AWB)</th>
                   <th className="py-3 px-4">Time Scanned</th>
                   <th className="py-3 px-4">Duration</th>
-                  <th className="py-3 px-4">Storage Location</th>
+                  <th className="py-3 px-4">Type</th>
                   <th className="py-3 px-4 text-center">Video Link</th>
                 </tr>
               </thead>
@@ -377,8 +377,12 @@ export default function Analytics() {
                     <td className="py-3 px-4 text-slate-300">{formatTime(record.recordedAt)}</td>
                     <td className="py-3 px-4 font-mono font-medium text-slate-300">{record.duration}s</td>
                     <td className="py-3 px-4">
-                      <span className="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700/60 text-[10px] text-slate-400 font-semibold">
-                        {record.isMock ? 'Local disk fallback' : 'AWS S3 storage'}
+                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                        record.type === 'return'
+                          ? 'bg-rose-500/10 border border-rose-500/20 text-rose-400 font-mono'
+                          : 'bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 uppercase'
+                      }`}>
+                        {record.type === 'return' ? 'return' : 'ORDER'}
                       </span>
                     </td>
                     <td className="py-2 px-4 text-center">

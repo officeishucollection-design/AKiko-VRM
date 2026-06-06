@@ -16,8 +16,89 @@ export default function Recorder({ awb, onFinish, onCancel }) {
   
   const videoPreviewRef = useRef(null);
   const timerRef = useRef(null);
-  const durationRef = useRef(null);
+  const durationRef = useRef(0);
+  const recordingStartTimeRef = useRef(null);
   const mediaRecorderRef = useRef(null);
+
+  const stopRecording = () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+    if (recordingStartTimeRef.current) {
+      const elapsed = Math.round((Date.now() - recordingStartTimeRef.current) / 1000);
+      durationRef.current = elapsed;
+      setDuration(elapsed);
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop();
+      setRecordingState('uploading');
+    }
+  };
+
+  const uploadRecording = async (blob) => {
+    try {
+      setRecordingState('uploading');
+      
+      const fileType = blob.type || 'video/webm';
+
+      // 1. Fetch Presigned URL
+      const presignedRes = await fetch(`${API_URL}/api/records/presigned-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ awb, contentType: fileType })
+      });
+
+      if (!presignedRes.ok) {
+        const errJson = await presignedRes.json();
+        throw new Error(errJson.error || 'Failed to generate upload URL.');
+      }
+
+      const { uploadUrl, fileUrl, isMock } = await presignedRes.json();
+
+      // 2. Perform direct upload to S3 (or mock local handler)
+      const uploadHeaders = { 'Content-Type': fileType };
+      
+      const uploadRes = await fetch(uploadUrl, {
+        method: isMock ? 'POST' : 'PUT',
+        headers: uploadHeaders,
+        body: blob
+      });
+
+      if (!uploadRes.ok) {
+        throw new Error('Failed to upload video to storage bucket.');
+      }
+
+      // If mock, the backend returns the uploaded video endpoint path in JSON
+      let finalVideoUrl = fileUrl;
+      if (isMock) {
+        const uploadJson = await uploadRes.json();
+        finalVideoUrl = `${API_URL}${uploadJson.url}`;
+      }
+
+      // 3. Register record metadata on backend MongoDB
+      const saveRes = await fetch(`${API_URL}/api/records`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          awb,
+          videoUrl: finalVideoUrl,
+          duration: Math.max(1, durationRef.current || 0),
+          isMock
+        })
+      });
+
+      if (!saveRes.ok) {
+        const saveErr = await saveRes.json();
+        throw new Error(saveErr.error || 'Failed to save record metadata in database.');
+      }
+
+      setRecordingState('success');
+    } catch (err) {
+      console.error('Upload flow failed:', err);
+      setRecordingState('error');
+      setErrorMsg(err.message || 'An error occurred during S3 upload or database storage.');
+    }
+  };
 
   // Initialize camera and start recording automatically
   useEffect(() => {
@@ -71,10 +152,12 @@ export default function Recorder({ awb, onFinish, onCancel }) {
           userStream.getTracks().forEach(track => track.stop());
           
           // Proceed to upload the blob
-          uploadRecording(videoBlob, chunks);
+          uploadRecording(videoBlob);
         };
 
         // Start recording immediately
+        recordingStartTimeRef.current = Date.now();
+        durationRef.current = 0;
         recorder.start();
         setRecordingState('active');
         
@@ -84,7 +167,9 @@ export default function Recorder({ awb, onFinish, onCancel }) {
         timerRef.current = setInterval(() => {
           timer -= 1;
           setSecondsRemaining(timer);
-          setDuration(prev => prev + 1);
+          const elapsed = Math.round((Date.now() - recordingStartTimeRef.current) / 1000);
+          setDuration(elapsed);
+          durationRef.current = elapsed;
 
           if (timer <= 0) {
             stopRecording();
@@ -112,82 +197,7 @@ export default function Recorder({ awb, onFinish, onCancel }) {
     };
   }, [awb]);
 
-  const stopRecording = () => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-    }
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      mediaRecorderRef.current.stop();
-      setRecordingState('uploading');
-    }
-  };
 
-  const uploadRecording = async (blob, chunks) => {
-    try {
-      setRecordingState('uploading');
-      
-      // Determine file extension
-      const extension = blob.type.includes('mp4') ? 'mp4' : 'webm';
-      const fileType = blob.type || 'video/webm';
-
-      // 1. Fetch Presigned URL
-      const presignedRes = await fetch(`${API_URL}/api/records/presigned-url`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ awb, contentType: fileType })
-      });
-
-      if (!presignedRes.ok) {
-        const errJson = await presignedRes.json();
-        throw new Error(errJson.error || 'Failed to generate upload URL.');
-      }
-
-      const { uploadUrl, fileUrl, isMock } = await presignedRes.json();
-
-      // 2. Perform direct upload to S3 (or mock local handler)
-      const uploadHeaders = { 'Content-Type': fileType };
-      
-      const uploadRes = await fetch(uploadUrl, {
-        method: isMock ? 'POST' : 'PUT',
-        headers: uploadHeaders,
-        body: blob
-      });
-
-      if (!uploadRes.ok) {
-        throw new Error('Failed to upload video to storage bucket.');
-      }
-
-      // If mock, the backend returns the uploaded video endpoint path in JSON
-      let finalVideoUrl = fileUrl;
-      if (isMock) {
-        const uploadJson = await uploadRes.json();
-        finalVideoUrl = `${API_URL}${uploadJson.url}`;
-      }
-
-      // 3. Register record metadata on backend MongoDB
-      const saveRes = await fetch(`${API_URL}/api/records`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          awb,
-          videoUrl: finalVideoUrl,
-          duration: duration || RECORDING_LIMIT_SECONDS,
-          isMock
-        })
-      });
-
-      if (!saveRes.ok) {
-        const saveErr = await saveRes.json();
-        throw new Error(saveErr.error || 'Failed to save record metadata in database.');
-      }
-
-      setRecordingState('success');
-    } catch (err) {
-      console.error('Upload flow failed:', err);
-      setRecordingState('error');
-      setErrorMsg(err.message || 'An error occurred during S3 upload or database storage.');
-    }
-  };
 
   return (
     <div className="max-w-xl mx-auto space-y-6 animate-fade-in">

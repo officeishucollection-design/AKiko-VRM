@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { KeyRound, User, UserPlus, ShieldAlert, Loader2, Video, Sparkles } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { KeyRound, User, UserPlus, ShieldAlert, Loader2, Video, Sparkles, Boxes, Scale, RotateCcw, FileSpreadsheet, Lock } from 'lucide-react';
 
 const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/$/, '');
 
@@ -105,15 +105,31 @@ function Login({ onLoginSuccess }) {
         
         {/* Brand Header */}
         <div className="flex flex-col items-center mb-8 text-center">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-brand-600 to-indigo-400 flex items-center justify-center shadow-lg shadow-indigo-600/30 mb-4 animate-glow">
-            <Video className="w-7 h-7 text-white" />
+          <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-brand-600 via-indigo-600 to-indigo-400 flex items-center justify-center shadow-lg shadow-indigo-600/30 mb-3 animate-glow">
+            <Boxes className="w-7 h-7 text-white" />
           </div>
           <h1 className="font-extrabold text-white text-2xl tracking-tight leading-none font-sans">
-            VRM Portal
+            RunRave OpsSuite
           </h1>
-          <span className="text-xs text-slate-500 font-bold tracking-widest uppercase mt-2">
-            Video Resource Manager
+          <span className="text-xs text-slate-400 font-medium tracking-wide mt-1.5">
+            Enterprise Operations & Logistics Portal
           </span>
+
+          {/* Integrated Systems Badges */}
+          <div className="flex flex-wrap items-center justify-center gap-1.5 mt-3.5">
+            <span className="px-2 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-[10px] font-bold text-indigo-300 flex items-center gap-1">
+              <Video className="w-2.5 h-2.5" /> VRM
+            </span>
+            <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-bold text-emerald-300 flex items-center gap-1">
+              <FileSpreadsheet className="w-2.5 h-2.5" /> LMS (Excel Filler)
+            </span>
+            <span className="px-2 py-0.5 rounded-full bg-slate-800/80 border border-white/5 text-[10px] font-bold text-slate-400 flex items-center gap-1">
+              <Lock className="w-2.5 h-2.5 text-amber-400" /> CMS
+            </span>
+            <span className="px-2 py-0.5 rounded-full bg-slate-800/80 border border-white/5 text-[10px] font-bold text-slate-400 flex items-center gap-1">
+              <Lock className="w-2.5 h-2.5 text-amber-400" /> RMS
+            </span>
+          </div>
         </div>
 
         {/* First Run Admin Banner */}

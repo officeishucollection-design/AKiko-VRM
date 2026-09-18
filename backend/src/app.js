@@ -11,6 +11,7 @@ import Record from './models/Record.js';
 import { getUploadPresignedUrl, deleteFromS3 } from './services/s3.js';
 import authRoutes from './routes/authRoutes.js';
 import { protect, authorize, authorizeStation } from './middleware/auth.js';
+import excelFillerRoutes from './excel-filler/routes/api.js';
 
 dotenv.config();
 
@@ -60,10 +61,15 @@ const writeLocalDb = (records) => {
 const app = express();
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Auth Routes
 app.use('/api/auth', authRoutes);
+
+// Excel-Filler Routes (List Management System backend)
+app.use('/api', excelFillerRoutes);
+app.use('/api/excel-filler', excelFillerRoutes);
 
 // Serve static mock uploads
 app.use('/uploads', express.static(uploadsDir));

@@ -1,6 +1,27 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Calendar, Clock, Play, Download, Trash2, Video, ChevronDown, ListFilter, AlertCircle, RefreshCw, X, FileSpreadsheet, Image as ImageIcon, ChevronLeft, ChevronRight } from 'lucide-react';
+import { 
+  Search, 
+  Calendar, 
+  Clock, 
+  Play, 
+  Download, 
+  Trash2, 
+  Video, 
+  ChevronDown, 
+  ListFilter, 
+  AlertCircle, 
+  RefreshCw, 
+  X, 
+  FileSpreadsheet, 
+  Image as ImageIcon, 
+  ChevronLeft, 
+  ChevronRight,
+  Zap,
+  Check,
+  FileArchive
+} from 'lucide-react';
 import JSZip from 'jszip';
+import { compressPhoto, compressVideo, triggerDirectDownload, patchWebmDuration } from '../utils/compression';
 
 const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/$/, '');
 
@@ -16,6 +37,12 @@ export default function Records({ user }) {
   const [activeVideo, setActiveVideo] = useState(null);
   const [activePhoto, setActivePhoto] = useState(null);
   const [zippingAwb, setZippingAwb] = useState(null);
+  const [downloadingAwb, setDownloadingAwb] = useState(null);
+  const [downloadProgress, setDownloadProgress] = useState(null); // { awb, pct, text }
+  const [bulkProgress, setBulkProgress] = useState(null); // { current, total, text }
+  const [downloadQuality, setDownloadQuality] = useState('original'); // 'original' | 'compressed'
+  const [openMenuAwb, setOpenMenuAwb] = useState(null);
+  const [downloadingPhoto, setDownloadingPhoto] = useState(false);
   const [selectedAwbs, setSelectedAwbs] = useState([]);
   const [isBulkZipping, setIsBulkZipping] = useState(false);
   
@@ -38,6 +65,16 @@ export default function Records({ user }) {
     }, 0);
     return () => clearTimeout(t);
   }, [search, sortBy, activeTab, datePreset, startDate, endDate, minDuration, maxDuration]);
+  // Close card action menus on click outside
+  useEffect(() => {
+    const handleOutsideClick = (e) => {
+      if (!e.target.closest('.save-menu-container')) {
+        setOpenMenuAwb(null);
+      }
+    };
+    document.addEventListener('click', handleOutsideClick);
+    return () => document.removeEventListener('click', handleOutsideClick);
+  }, []);
 
   const fetchRecords = async () => {
     try {
@@ -234,88 +271,152 @@ export default function Records({ user }) {
     document.body.removeChild(link);
   };
 
-  const handleDownloadReturnZip = async (record) => {
+  // Helper to get proxied S3 URL if the URL is not hosted locally to bypass CORS policy
+  const getFetchUrl = (url) => {
+    if (!url) return '';
+    const isLocal = url.startsWith(API_URL) || url.startsWith('/') || url.startsWith('http://localhost:5000');
+    if (isLocal) {
+      return url;
+    }
+    const token = localStorage.getItem('vrm_token');
+    const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+    return `${API_URL}/api/proxy?url=${encodeURIComponent(url)}${tokenParam}`;
+  };
+
+  // Direct video download (with compression option) - prevents opening in new tab
+  const handleDownloadVideo = async (record, mode = downloadQuality) => {
+    if (!record.videoUrl) return;
+    const awb = record.awb;
+    setDownloadingAwb(awb);
+    setOpenMenuAwb(null);
+    setDownloadProgress({ awb, pct: 0, text: 'Fetching video stream...' });
+
+    try {
+      const fetchUrl = getFetchUrl(record.videoUrl);
+      const res = await fetch(fetchUrl);
+      if (!res.ok) throw new Error('Failed to retrieve video stream from storage.');
+      let blob = await res.blob();
+
+      const cleanUrl = record.videoUrl.split(';')[0].split('?')[0];
+      const ext = cleanUrl.split('.').pop() || 'webm';
+
+      if (mode === 'compressed') {
+        setDownloadProgress({ awb, pct: 10, text: 'Compressing HD video...' });
+        blob = await compressVideo(blob, {
+          duration: record.duration,
+          onProgress: (pct) => {
+            setDownloadProgress({ awb, pct, text: `Compressing HD video (${pct}%)...` });
+          }
+        });
+      } else if (ext === 'webm' && record.duration) {
+        blob = await patchWebmDuration(blob, record.duration);
+      }
+
+      const filename = `AWB_${awb}${mode === 'compressed' ? '_compressed' : ''}.${ext}`;
+      triggerDirectDownload(blob, filename);
+    } catch (err) {
+      console.error('Video download failed:', err);
+      alert(`Download failed: ${err.message}`);
+    } finally {
+      setDownloadingAwb(null);
+      setDownloadProgress(null);
+    }
+  };
+
+  // Direct return ZIP download (with compression option)
+  const handleDownloadReturnZip = async (record, mode = downloadQuality) => {
     const awb = record.awb;
     setZippingAwb(awb);
-    
-    // Helper to get proxied S3 URL if the URL is not hosted locally to bypass CORS policy
-    const getFetchUrl = (url) => {
-      if (!url) return '';
-      const isLocal = url.startsWith(API_URL) || url.startsWith('/') || url.startsWith('http://localhost:5000');
-      if (isLocal) {
-        return url;
-      }
-      return `${API_URL}/api/proxy?url=${encodeURIComponent(url)}`;
-    };
+    setOpenMenuAwb(null);
+    setDownloadProgress({ awb, pct: 0, text: 'Preparing archive...' });
 
     try {
       const zip = new JSZip();
       
       // 1. Download and append video if exists
       if (record.videoUrl) {
+        setDownloadProgress({ awb, pct: 15, text: 'Downloading video...' });
         const videoRes = await fetch(getFetchUrl(record.videoUrl));
-        if (!videoRes.ok) throw new Error('Failed to retrieve video stream file.');
-        const videoBlob = await videoRes.blob();
-        
-        // Extract file extension
-        const ext = record.videoUrl.split(';')[0].split('/')[1] || 'webm';
-        zip.file(`video_${awb}.${ext.split(';')[0]}`, videoBlob);
+        if (videoRes.ok) {
+          let videoBlob = await videoRes.blob();
+          const cleanUrl = record.videoUrl.split(';')[0].split('?')[0];
+          const ext = cleanUrl.split('.').pop() || 'webm';
+
+          if (mode === 'compressed') {
+            setDownloadProgress({ awb, pct: 25, text: 'Compressing HD video...' });
+            videoBlob = await compressVideo(videoBlob, {
+              duration: record.duration,
+              onProgress: (pct) => {
+                setDownloadProgress({ awb, pct: Math.round(25 + (pct * 0.35)), text: `Compressing HD video (${pct}%)...` });
+              }
+            });
+          } else if (ext === 'webm' && record.duration) {
+            videoBlob = await patchWebmDuration(videoBlob, record.duration);
+          }
+          zip.file(`video_${awb}${mode === 'compressed' ? '_compressed' : ''}.${ext}`, videoBlob);
+        }
       }
       
       // 2. Download and append photos
       if (record.photos && record.photos.length > 0) {
         for (let i = 0; i < record.photos.length; i++) {
           const photoUrl = record.photos[i];
+          const basePct = 60 + Math.round((i / record.photos.length) * 30);
+          setDownloadProgress({ awb, pct: basePct, text: `Processing photo ${i + 1} of ${record.photos.length}...` });
+
           const photoRes = await fetch(getFetchUrl(photoUrl));
-          if (!photoRes.ok) throw new Error(`Failed to retrieve inspection snapshot ${i + 1}.`);
-          const photoBlob = await photoRes.blob();
-          
-          const ext = photoUrl.split('.').pop().split('?')[0] || 'jpg';
-          zip.file(`photo_${i + 1}.${ext}`, photoBlob);
+          if (photoRes.ok) {
+            let photoBlob = await photoRes.blob();
+            const cleanUrl = photoUrl.split('?')[0];
+            let ext = cleanUrl.split('.').pop() || 'jpg';
+
+            if (mode === 'compressed') {
+              photoBlob = await compressPhoto(photoBlob);
+              ext = 'jpg';
+            }
+            zip.file(`photo_${i + 1}${mode === 'compressed' ? '_compressed' : ''}.${ext}`, photoBlob);
+          }
         }
       }
       
       // 3. Compile zip
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      setDownloadProgress({ awb, pct: 95, text: 'Packaging ZIP file...' });
+      const zipBlob = await zip.generateAsync({ 
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: { level: mode === 'compressed' ? 9 : 6 }
+      });
       
-      // 4. Download file
-      const downloadUrl = URL.createObjectURL(zipBlob);
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.download = `${awb}.zip`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(downloadUrl);
+      // 4. Download file directly
+      triggerDirectDownload(zipBlob, `${awb}${mode === 'compressed' ? '_compressed' : ''}.zip`);
       
     } catch (err) {
       console.error('ZIP generation error:', err);
       alert(`ZIP Folder Download failed: ${err.message}.`);
     } finally {
       setZippingAwb(null);
+      setDownloadProgress(null);
     }
   };
 
-  const handleBulkDownloadZip = async () => {
+  // Bulk ZIP download with compression option
+  const handleBulkDownloadZip = async (mode = downloadQuality) => {
     if (selectedAwbs.length === 0) return;
     setIsBulkZipping(true);
-    
-    // Helper to get proxied S3 URL if the URL is not hosted locally to bypass CORS policy
-    const getFetchUrl = (url) => {
-      if (!url) return '';
-      const isLocal = url.startsWith(API_URL) || url.startsWith('/') || url.startsWith('http://localhost:5000');
-      if (isLocal) {
-        return url;
-      }
-      return `${API_URL}/api/proxy?url=${encodeURIComponent(url)}`;
-    };
+    setBulkProgress({ current: 0, total: selectedAwbs.length, text: 'Starting bulk package export...' });
 
     try {
       const zip = new JSZip();
-      
       const selectedRecords = records.filter(r => selectedAwbs.includes(r.awb));
       
-      for (const record of selectedRecords) {
+      for (let idx = 0; idx < selectedRecords.length; idx++) {
+        const record = selectedRecords[idx];
+        setBulkProgress({
+          current: idx + 1,
+          total: selectedRecords.length,
+          text: `Processing AWB ${record.awb} (${idx + 1} of ${selectedRecords.length})...`
+        });
+
         const folder = zip.folder(record.awb);
         
         // 1. Download and append video if exists
@@ -323,9 +424,16 @@ export default function Records({ user }) {
           try {
             const videoRes = await fetch(getFetchUrl(record.videoUrl));
             if (videoRes.ok) {
-              const videoBlob = await videoRes.blob();
-              const ext = record.videoUrl.split(';')[0].split('/')[1] || 'webm';
-              folder.file(`video_${record.awb}.${ext.split(';')[0]}`, videoBlob);
+              let videoBlob = await videoRes.blob();
+              const cleanUrl = record.videoUrl.split(';')[0].split('?')[0];
+              const ext = cleanUrl.split('.').pop() || 'webm';
+
+              if (mode === 'compressed') {
+                videoBlob = await compressVideo(videoBlob, { duration: record.duration });
+              } else if (ext === 'webm' && record.duration) {
+                videoBlob = await patchWebmDuration(videoBlob, record.duration);
+              }
+              folder.file(`video_${record.awb}${mode === 'compressed' ? '_compressed' : ''}.${ext}`, videoBlob);
             }
           } catch (e) {
             console.error(`Failed to download video for AWB ${record.awb}:`, e);
@@ -339,9 +447,15 @@ export default function Records({ user }) {
               const photoUrl = record.photos[i];
               const photoRes = await fetch(getFetchUrl(photoUrl));
               if (photoRes.ok) {
-                const photoBlob = await photoRes.blob();
-                const ext = photoUrl.split('.').pop().split('?')[0] || 'jpg';
-                folder.file(`photo_${i + 1}.${ext}`, photoBlob);
+                let photoBlob = await photoRes.blob();
+                const cleanUrl = photoUrl.split('?')[0];
+                let ext = cleanUrl.split('.').pop() || 'jpg';
+
+                if (mode === 'compressed') {
+                  photoBlob = await compressPhoto(photoBlob);
+                  ext = 'jpg';
+                }
+                folder.file(`photo_${i + 1}${mode === 'compressed' ? '_compressed' : ''}.${ext}`, photoBlob);
               }
             } catch (e) {
               console.error(`Failed to download photo ${i + 1} for AWB ${record.awb}:`, e);
@@ -350,18 +464,17 @@ export default function Records({ user }) {
         }
       }
       
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
-      const downloadUrl = URL.createObjectURL(zipBlob);
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      
+      setBulkProgress(prev => ({ ...prev, text: 'Compiling final ZIP bundle...' }));
+      const zipBlob = await zip.generateAsync({ 
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: { level: mode === 'compressed' ? 9 : 6 }
+      });
+
       const timestampStr = new Date().toISOString().split('T')[0];
       const exportType = activeTab === 'return' ? 'Returns' : 'Orders';
-      link.download = `VRM_Bulk_${exportType}_${timestampStr}.zip`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(downloadUrl);
+      const filename = `VRM_Bulk_${exportType}_${timestampStr}${mode === 'compressed' ? '_compressed' : ''}.zip`;
+      triggerDirectDownload(zipBlob, filename);
       
       setSelectedAwbs([]);
     } catch (err) {
@@ -369,6 +482,32 @@ export default function Records({ user }) {
       alert(`Bulk ZIP download failed: ${err.message}`);
     } finally {
       setIsBulkZipping(false);
+      setBulkProgress(null);
+    }
+  };
+
+  // Direct single photo download
+  const handleDownloadSinglePhoto = async (photoUrl, awb, mode = downloadQuality) => {
+    try {
+      setDownloadingPhoto(true);
+      const res = await fetch(getFetchUrl(photoUrl));
+      if (!res.ok) throw new Error('Failed to retrieve photo from storage.');
+      let blob = await res.blob();
+      const cleanUrl = photoUrl.split('?')[0];
+      let ext = cleanUrl.split('.').pop() || 'jpg';
+
+      if (mode === 'compressed') {
+        blob = await compressPhoto(blob);
+        ext = 'jpg';
+      }
+
+      const filename = `Photo_${awb}_${Date.now()}${mode === 'compressed' ? '_compressed' : ''}.${ext}`;
+      triggerDirectDownload(blob, filename);
+    } catch (err) {
+      console.error('Photo download failed:', err);
+      alert(`Photo download failed: ${err.message}`);
+    } finally {
+      setDownloadingPhoto(false);
     }
   };
 
@@ -385,7 +524,39 @@ export default function Records({ user }) {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Download Quality Switcher */}
+          <div className="flex items-center bg-slate-900/80 border border-slate-700/60 rounded-xl p-1 shadow-md">
+            <span className="text-[11px] font-semibold text-slate-400 px-2 flex items-center gap-1">
+              <Zap className={`w-3.5 h-3.5 ${downloadQuality === 'compressed' ? 'text-amber-400 fill-amber-400' : 'text-slate-500'}`} />
+              Download:
+            </span>
+            <button
+              type="button"
+              onClick={() => setDownloadQuality('original')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                downloadQuality === 'original'
+                  ? 'bg-slate-700 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Download media in original recorded size"
+            >
+              Original
+            </button>
+            <button
+              type="button"
+              onClick={() => setDownloadQuality('compressed')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${
+                downloadQuality === 'compressed'
+                  ? 'bg-brand-600 text-white shadow-sm shadow-brand-500/20'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Compress videos and photos before downloading (70-85% smaller files)"
+            >
+              Compressed
+            </button>
+          </div>
+
           <button
             onClick={handleExportCSV}
             className="px-4 py-2 bg-emerald-600/10 hover:bg-emerald-600 border border-emerald-500/30 hover:border-emerald-500 text-emerald-400 hover:text-white rounded-xl text-sm font-semibold flex items-center gap-2 transition-all shadow-md active:scale-95"
@@ -603,25 +774,30 @@ export default function Records({ user }) {
         <div className="space-y-5">
           {/* Batch Action Banner */}
           {selectedAwbs.length > 0 && (
-            <div className="flex items-center justify-between p-4 bg-indigo-600/20 border border-indigo-500/30 rounded-xl shadow-lg animate-fade-in gap-4 animate-scale-up">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 bg-indigo-600/20 border border-indigo-500/30 rounded-xl shadow-lg animate-fade-in gap-4 animate-scale-up">
               <div className="text-xs md:text-sm font-semibold text-indigo-300">
                 Selected <span className="text-white font-extrabold font-mono">{selectedAwbs.length}</span> {selectedAwbs.length === 1 ? 'log' : 'logs'} for batch action
+                {bulkProgress && (
+                  <span className="block text-xs text-indigo-200 mt-1 font-mono font-normal">
+                    {bulkProgress.text}
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-3">
                 <button
-                  onClick={handleBulkDownloadZip}
+                  onClick={() => handleBulkDownloadZip(downloadQuality)}
                   disabled={isBulkZipping}
                   className="px-4 py-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold uppercase flex items-center gap-1.5 transition-colors shadow-md active:scale-95"
                 >
                   {isBulkZipping ? (
                     <>
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      Zipping...
+                      {bulkProgress ? `Archiving (${bulkProgress.current}/${bulkProgress.total})...` : 'Zipping...'}
                     </>
                   ) : (
                     <>
                       <Download className="w-3.5 h-3.5" />
-                      Bulk Save ZIP
+                      Bulk Save ZIP ({downloadQuality === 'compressed' ? 'Compressed' : 'Original'})
                     </>
                   )}
                 </button>
@@ -793,38 +969,151 @@ export default function Records({ user }) {
                     Play
                   </button>
                   
-                  {record.type === 'return' ? (
-                    <button
-                      type="button"
-                      disabled={zippingAwb === record.awb || (record.photos.length === 0 && !record.videoUrl)}
-                      onClick={() => handleDownloadReturnZip(record)}
-                      className="py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700/60 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-                    >
-                      {zippingAwb === record.awb ? (
-                        <>
-                          <RefreshCw className="w-3 h-3 animate-spin text-slate-400" />
-                          Zipping...
-                        </>
-                      ) : (
-                        <>
-                          <Download className="w-3.5 h-3.5" />
-                          Save ZIP
-                        </>
-                      )}
-                    </button>
-                  ) : (
-                    <a
-                      href={record.videoUrl || '#'}
-                      onClick={(e) => { if(!record.videoUrl) e.preventDefault(); }}
-                      download={`AWB_${record.awb}.webm`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className={`py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700/60 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-colors ${!record.videoUrl ? 'opacity-30 cursor-not-allowed' : ''}`}
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      Save
-                    </a>
-                  )}
+                  {/* Save Button with Dropdown Options */}
+                  <div className="relative save-menu-container flex items-center">
+                    {record.type === 'return' ? (
+                      <div className="flex w-full rounded-lg overflow-hidden border border-slate-700/60 bg-slate-800">
+                        <button
+                          type="button"
+                          disabled={zippingAwb === record.awb || (record.photos.length === 0 && !record.videoUrl)}
+                          onClick={() => handleDownloadReturnZip(record, downloadQuality)}
+                          className="flex-1 py-2 px-2 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-30 disabled:cursor-not-allowed truncate"
+                          title={`Save ZIP archive (${downloadQuality})`}
+                        >
+                          {zippingAwb === record.awb ? (
+                            <>
+                              <RefreshCw className="w-3 h-3 animate-spin text-slate-400 shrink-0" />
+                              <span className="truncate">{downloadProgress?.text || 'Zipping...'}</span>
+                            </>
+                          ) : (
+                            <>
+                              <Download className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate">Save ZIP {downloadQuality === 'compressed' ? '⚡' : ''}</span>
+                            </>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={zippingAwb === record.awb || (record.photos.length === 0 && !record.videoUrl)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenMenuAwb(openMenuAwb === record.awb ? null : record.awb);
+                          }}
+                          className="px-1.5 hover:bg-slate-700 text-slate-400 hover:text-white border-l border-slate-700 transition-colors disabled:opacity-30"
+                          title="More download options"
+                        >
+                          <ChevronDown className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex w-full rounded-lg overflow-hidden border border-slate-700/60 bg-slate-800">
+                        <button
+                          type="button"
+                          disabled={downloadingAwb === record.awb || !record.videoUrl}
+                          onClick={() => handleDownloadVideo(record, downloadQuality)}
+                          className="flex-1 py-2 px-2 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-30 disabled:cursor-not-allowed truncate"
+                          title={`Save Video (${downloadQuality})`}
+                        >
+                          {downloadingAwb === record.awb ? (
+                            <>
+                              <RefreshCw className="w-3 h-3 animate-spin text-slate-400 shrink-0" />
+                              <span className="truncate">{downloadProgress?.text || 'Saving...'}</span>
+                            </>
+                          ) : (
+                            <>
+                              <Download className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate">Save {downloadQuality === 'compressed' ? '⚡' : ''}</span>
+                            </>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={downloadingAwb === record.awb || !record.videoUrl}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenMenuAwb(openMenuAwb === record.awb ? null : record.awb);
+                          }}
+                          className="px-1.5 hover:bg-slate-700 text-slate-400 hover:text-white border-l border-slate-700 transition-colors disabled:opacity-30"
+                          title="More download options"
+                        >
+                          <ChevronDown className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Popover Dropdown Menu */}
+                    {openMenuAwb === record.awb && (
+                      <div 
+                        className="absolute bottom-full mb-1.5 right-0 w-52 bg-dark-900 border border-slate-700 rounded-xl shadow-2xl z-40 p-1.5 animate-scale-up text-left"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="px-2 py-1 text-[10px] uppercase font-bold text-slate-400 border-b border-white/5 mb-1">
+                          Download Options
+                        </div>
+                        {record.type === 'return' ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadReturnZip(record, 'original')}
+                              className="w-full px-2.5 py-1.5 hover:bg-slate-800 text-slate-200 text-xs rounded-lg flex items-center justify-between transition-colors"
+                            >
+                              <span className="flex items-center gap-1.5">
+                                <FileArchive className="w-3.5 h-3.5 text-indigo-400" />
+                                Full ZIP (Original)
+                              </span>
+                              {downloadQuality === 'original' && <Check className="w-3 h-3 text-indigo-400" />}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadReturnZip(record, 'compressed')}
+                              className="w-full px-2.5 py-1.5 hover:bg-slate-800 text-slate-200 text-xs rounded-lg flex items-center justify-between transition-colors"
+                            >
+                              <span className="flex items-center gap-1.5">
+                                <Zap className="w-3.5 h-3.5 text-amber-400" />
+                                Full ZIP (Compressed)
+                              </span>
+                              {downloadQuality === 'compressed' && <Check className="w-3 h-3 text-brand-400" />}
+                            </button>
+                            {record.videoUrl && (
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadVideo(record, downloadQuality)}
+                                className="w-full px-2.5 py-1.5 hover:bg-slate-800 text-slate-200 text-xs rounded-lg flex items-center gap-1.5 border-t border-white/5 mt-1 pt-1.5 transition-colors"
+                              >
+                                <Video className="w-3.5 h-3.5 text-slate-400" />
+                                Video Only ({downloadQuality})
+                              </button>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadVideo(record, 'original')}
+                              className="w-full px-2.5 py-1.5 hover:bg-slate-800 text-slate-200 text-xs rounded-lg flex items-center justify-between transition-colors"
+                            >
+                              <span className="flex items-center gap-1.5">
+                                <Download className="w-3.5 h-3.5 text-indigo-400" />
+                                Original Quality
+                              </span>
+                              {downloadQuality === 'original' && <Check className="w-3 h-3 text-indigo-400" />}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadVideo(record, 'compressed')}
+                              className="w-full px-2.5 py-1.5 hover:bg-slate-800 text-slate-200 text-xs rounded-lg flex items-center justify-between transition-colors"
+                            >
+                              <span className="flex items-center gap-1.5">
+                                <Zap className="w-3.5 h-3.5 text-amber-400" />
+                                Compressed (~75% smaller)
+                              </span>
+                              {downloadQuality === 'compressed' && <Check className="w-3 h-3 text-brand-400" />}
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
                   
                   {user?.role === 'admin' && (
                     <button
@@ -960,16 +1249,37 @@ export default function Records({ user }) {
             </div>
 
             {/* Modal Footer Controls Info */}
-            <div className="px-6 py-3 bg-slate-950/40 text-[11px] text-slate-500 flex justify-between">
-              <span>Host Address: {activeVideo.url.substring(0, 48)}...</span>
-              <a 
-                href={activeVideo.url} 
-                target="_blank" 
-                rel="noreferrer" 
-                className="text-indigo-400 hover:text-indigo-300 font-semibold transition-colors"
-              >
-                Open in direct window
-              </a>
+            <div className="px-6 py-3 bg-slate-950/60 border-t border-white/5 text-[11px] text-slate-500 flex flex-wrap items-center justify-between gap-3">
+              <span className="truncate max-w-xs">Host: {activeVideo.url.substring(0, 38)}...</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={downloadingAwb === activeVideo.awb}
+                  onClick={() => handleDownloadVideo({ awb: activeVideo.awb, videoUrl: activeVideo.url }, 'original')}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all"
+                >
+                  <Download className="w-3.5 h-3.5 text-indigo-400" />
+                  Save Original
+                </button>
+                <button
+                  type="button"
+                  disabled={downloadingAwb === activeVideo.awb}
+                  onClick={() => handleDownloadVideo({ awb: activeVideo.awb, videoUrl: activeVideo.url }, 'compressed')}
+                  className="px-3 py-1.5 bg-brand-600 hover:bg-brand-500 disabled:opacity-40 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-md"
+                >
+                  {downloadingAwb === activeVideo.awb ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      {downloadProgress?.text || 'Compressing...'}
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="w-3.5 h-3.5 text-amber-300" />
+                      Save Compressed
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
           </div>
@@ -981,9 +1291,12 @@ export default function Records({ user }) {
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in" onClick={() => setActivePhoto(null)}>
           <div className="bg-dark-900 border border-white/10 w-full max-w-2xl rounded-2xl overflow-hidden shadow-2xl relative animate-scale-up" onClick={(e) => e.stopPropagation()}>
             <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between">
-              <h3 className="font-extrabold text-white text-base md:text-lg font-mono truncate">
-                AWB Photo: {activePhoto.awb}
-              </h3>
+              <div className="space-y-0.5">
+                <span className="text-[10px] uppercase font-bold tracking-widest text-indigo-400">Photo Inspection Snap</span>
+                <h3 className="font-extrabold text-white text-base md:text-lg font-mono truncate">
+                  AWB: {activePhoto.awb}
+                </h3>
+              </div>
               <button 
                 onClick={() => setActivePhoto(null)}
                 className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition-colors focus:outline-none"
@@ -993,6 +1306,38 @@ export default function Records({ user }) {
             </div>
             <div className="w-full aspect-square md:aspect-video bg-black flex items-center justify-center">
               <img src={activePhoto.url} className="w-full h-full object-contain" alt="" />
+            </div>
+            <div className="px-6 py-3 bg-slate-950/60 border-t border-white/5 flex flex-wrap items-center justify-between gap-3">
+              <span className="text-[11px] text-slate-500">Inspection snapshot image</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={downloadingPhoto}
+                  onClick={() => handleDownloadSinglePhoto(activePhoto.url, activePhoto.awb, 'original')}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all"
+                >
+                  <Download className="w-3.5 h-3.5 text-indigo-400" />
+                  Save Original
+                </button>
+                <button
+                  type="button"
+                  disabled={downloadingPhoto}
+                  onClick={() => handleDownloadSinglePhoto(activePhoto.url, activePhoto.awb, 'compressed')}
+                  className="px-3 py-1.5 bg-brand-600 hover:bg-brand-500 disabled:opacity-40 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-md"
+                >
+                  {downloadingPhoto ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="w-3.5 h-3.5 text-amber-300" />
+                      Save Compressed
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>

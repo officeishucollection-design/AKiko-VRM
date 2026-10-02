@@ -9,10 +9,13 @@ export const protect = async (req, res, next) => {
     req.headers.authorization &&
     req.headers.authorization.startsWith('Bearer')
   ) {
-    try {
-      // Get token from header
-      token = req.headers.authorization.split(' ')[1];
+    token = req.headers.authorization.split(' ')[1];
+  } else if (req.query && req.query.token) {
+    token = req.query.token;
+  }
 
+  if (token) {
+    try {
       // Verify token
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
@@ -23,16 +26,14 @@ export const protect = async (req, res, next) => {
         return res.status(401).json({ error: 'Not authorized, user not found' });
       }
 
-      next();
+      return next();
     } catch (error) {
       console.error('JWT Verification Error:', error.message);
       return res.status(401).json({ error: 'Not authorized, token failed' });
     }
   }
 
-  if (!token) {
-    return res.status(401).json({ error: 'Not authorized, no token provided' });
-  }
+  return res.status(401).json({ error: 'Not authorized, no token provided' });
 };
 
 // Grant access to specific roles

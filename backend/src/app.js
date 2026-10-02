@@ -10,6 +10,8 @@ import connectDB from './config/db.js';
 import Record from './models/Record.js';
 import { getUploadPresignedUrl, deleteFromS3 } from './services/s3.js';
 import authRoutes from './routes/authRoutes.js';
+import claimRoutes from './routes/claimRoutes.js';
+import snapdealRoutes from './routes/snapdealRoutes.js';
 import { protect, authorize, authorizeStation } from './middleware/auth.js';
 import excelFillerRoutes from './excel-filler/routes/api.js';
 
@@ -66,6 +68,12 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Auth Routes
 app.use('/api/auth', authRoutes);
+
+// Claims / CMS Routes
+app.use('/api', claimRoutes);
+
+// Snapdeal Sync Routes
+app.use('/api', snapdealRoutes);
 
 // Excel-Filler Routes (List Management System backend)
 app.use('/api', excelFillerRoutes);
@@ -135,7 +143,7 @@ app.post('/api/records/presigned-url', protect, authorize('admin', 'operator'), 
 // 2. Save Metadata after upload
 app.post('/api/records', protect, authorize('admin', 'operator'), authorizeStation, async (req, res) => {
   try {
-    const { awb, videoUrl, photos, duration, isMock, type } = req.body;
+    const { awb, videoUrl, photos, duration, isMock, type, categorizedPhotos, suborderId, snapdealRefCode, sku, productTitle } = req.body;
     
     if (!awb) {
       return res.status(400).json({ error: 'AWB is required' });
@@ -157,6 +165,13 @@ app.post('/api/records', protect, authorize('admin', 'operator'), authorizeStati
       recordedAt: new Date(),
       isMock: !!isMock
     };
+
+    // CMS enhancement fields (optional)
+    if (categorizedPhotos) recordData.categorizedPhotos = categorizedPhotos;
+    if (suborderId) recordData.suborderId = suborderId.trim();
+    if (snapdealRefCode) recordData.snapdealRefCode = snapdealRefCode.trim();
+    if (sku) recordData.sku = sku.trim();
+    if (productTitle) recordData.productTitle = productTitle.trim();
 
     const newRecord = await Record.create(recordData);
     console.log(`Saved record for AWB ${recordData.awb} to MongoDB.`);

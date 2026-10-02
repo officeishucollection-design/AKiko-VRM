@@ -29,6 +29,19 @@ const RecordSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
+    // CMS fields
+    suborderId: { type: String, index: true, trim: true },
+    snapdealRefCode: { type: String, index: true, trim: true },
+    sku: { type: String, trim: true },
+    productTitle: { type: String, trim: true },
+    linkedOrderRecordId: { type: mongoose.Schema.Types.ObjectId, ref: 'Record' },
+    categorizedPhotos: {
+      outerPackaging: { type: String },
+      innerPackaging: { type: String },
+      product: { type: String },
+      pod: { type: String },
+      extras: { type: [String] },
+    },
     recordedAt: {
       type: Date,
       default: Date.now,

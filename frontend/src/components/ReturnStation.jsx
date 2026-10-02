@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, Barcode, Trash2, RotateCcw, Image as ImageIcon, Video, CheckCircle2, AlertCircle, RefreshCw, Sparkles, Focus, ChevronRight, X, ShieldAlert } from 'lucide-react';
+import { Camera, Barcode, Trash2, RotateCcw, Image as ImageIcon, Video, CheckCircle2, AlertCircle, RefreshCw, Sparkles, Focus, ChevronRight, X, ShieldAlert, Package, PackageOpen, ScanLine, Fingerprint, ShieldCheck, Lock } from 'lucide-react';
 
 const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/$/, '');
 
@@ -30,11 +30,21 @@ export default function ReturnStation({ active }) {
   
   // Return Session states
   const [activeAwb, setActiveAwb] = useState(null);
-  const [localPhotos, setLocalPhotos] = useState([]); // Array of Base64 DataURIs representing snaps
+  const [localPhotos, setLocalPhotos] = useState([]); // Array of Base64 DataURIs representing snaps (extras)
   const [isRecording, setIsRecording] = useState(false);
   const [videoBlob, setVideoBlob] = useState(null);
   const [duration, setDuration] = useState(0);
-  
+
+  // Mandatory 4-Photo slots for Snapdeal CMS evidence
+  const PHOTO_SLOTS = [
+    { key: 'outerPackaging', label: 'Outer Packaging + Packslip', icon: Package, description: 'Show the outer box/packet with the shipping label clearly visible' },
+    { key: 'innerPackaging', label: 'Inner Packaging', icon: PackageOpen, description: 'Show interior packing material (bubble wrap, foam, etc.)' },
+    { key: 'product', label: 'Product Image', icon: ScanLine, description: 'Clear photo of the actual product received (damaged/wrong/missing)' },
+    { key: 'pod', label: 'Proof of Delivery', icon: Fingerprint, description: 'POD slip or delivery partner scan receipt' },
+  ];
+  const [categorizedPhotos, setCategorizedPhotos] = useState({ outerPackaging: null, innerPackaging: null, product: null, pod: null });
+  const [activeSlot, setActiveSlot] = useState(null); // Which slot to fill on next capture
+
   // UI Inputs and states
   const [inputVal, setInputVal] = useState('');
   const [isFocused, setIsFocused] = useState(true);
@@ -121,7 +131,7 @@ export default function ReturnStation({ active }) {
   };
 
   // Capture Base64 JPG snapshot of current video frame
-  const handleCapturePhoto = () => {
+  const handleCapturePhoto = (slotKey = null) => {
     if (videoPreviewRef.current && cameraStatus === 'active') {
       const video = videoPreviewRef.current;
       const canvas = document.createElement('canvas');
@@ -132,12 +142,26 @@ export default function ReturnStation({ active }) {
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       
       const photoDataUrl = canvas.toDataURL('image/jpeg', 0.85); // 85% compression
-      setLocalPhotos(prev => [...prev, photoDataUrl]);
+
+      const targetSlot = slotKey || activeSlot;
+      if (targetSlot && Object.prototype.hasOwnProperty.call(categorizedPhotos, targetSlot)) {
+        // Fill named mandatory slot
+        setCategorizedPhotos(prev => ({ ...prev, [targetSlot]: photoDataUrl }));
+        // Auto-advance to next empty slot
+        const keys = PHOTO_SLOTS.map(s => s.key);
+        const currentIdx = keys.indexOf(targetSlot);
+        const nextEmpty = keys.find((k, i) => i > currentIdx && !categorizedPhotos[k] && k !== targetSlot);
+        setActiveSlot(nextEmpty || null);
+      } else {
+        // No named slot — add to extras list
+        setLocalPhotos(prev => [...prev, photoDataUrl]);
+      }
       
       // Shutter click sound
       playBeep(1800);
     }
   };
+
 
   // Start Video recording
   const handleStartRecording = () => {
@@ -231,11 +255,15 @@ export default function ReturnStation({ active }) {
     recordingStartTimeRef.current = null;
     setCameraStatus('standby');
     setUploadStatus('idle');
+    setCategorizedPhotos({ outerPackaging: null, innerPackaging: null, product: null, pod: null });
+    setActiveSlot(null);
   };
 
+
   // Submits the return data (uploads photos + video to S3 and MongoDB)
-  const handleSubmitReturn = async (awbToSubmit = activeAwb, photosToSubmit = localPhotos, videoToSubmit = videoBlob, durationToSubmit = duration) => {
+  const handleSubmitReturn = async (awbToSubmit = activeAwb, photosToSubmit = localPhotos, videoToSubmit = videoBlob, durationToSubmit = duration, categorizedPhotosToSubmit = categorizedPhotos) => {
     if (!awbToSubmit) return;
+
     
     setUploadStatus('uploading');
     setUploadProgress('Contacting server upload portal...');
@@ -335,9 +363,11 @@ export default function ReturnStation({ active }) {
           photos: uploadedPhotoUrls,
           duration: durationToSubmit,
           type: 'return',
-          isMock: resolvedIsMock
+          isMock: resolvedIsMock,
+          categorizedPhotos: categorizedPhotosToSubmit
         })
       });
+
 
       if (!saveRes.ok) {
         throw new Error('Failed to save return metadata log.');
@@ -705,24 +735,113 @@ export default function ReturnStation({ active }) {
           <div className="glass-panel p-5 rounded-2xl border border-indigo-500/30 shadow-2xl flex flex-col space-y-5 animate-scale-up">
             
             <div className="space-y-1">
-              <span className="text-[10px] font-black uppercase text-indigo-400 tracking-wider">Inspect Checklist</span>
+              <span className="text-[10px] font-black uppercase text-indigo-400 tracking-wider">Evidence Checklist</span>
               <h3 className="font-bold text-white text-sm font-mono truncate">{activeAwb}</h3>
             </div>
 
-            {/* Photos Snapped Grid */}
+            {/* 4 Mandatory Photo Slots */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Mandatory Evidence Photos</label>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
+                  Object.values(categorizedPhotos).filter(Boolean).length === 4
+                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                    : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                }`}>
+                  {Object.values(categorizedPhotos).filter(Boolean).length}/4
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                {PHOTO_SLOTS.map((slot) => {
+                  const SlotIcon = slot.icon;
+                  const isActive = activeSlot === slot.key;
+                  const isFilled = !!categorizedPhotos[slot.key];
+                  return (
+                    <div
+                      key={slot.key}
+                      className={`rounded-xl border transition-all ${
+                        isFilled
+                          ? 'border-emerald-500/30 bg-emerald-500/5'
+                          : isActive
+                          ? 'border-indigo-500/60 bg-indigo-500/10 ring-1 ring-indigo-500/30'
+                          : 'border-white/5 bg-dark-900/40'
+                      }`}
+                    >
+                      {isFilled ? (
+                        /* Filled slot — show thumbnail with retake */
+                        <div className="flex items-center gap-3 p-2.5">
+                          <img
+                            src={categorizedPhotos[slot.key]}
+                            alt={slot.label}
+                            className="w-14 h-10 object-cover rounded-lg border border-white/10 shrink-0"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[11px] font-bold text-emerald-400 flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3" /> {slot.label}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCategorizedPhotos(prev => ({ ...prev, [slot.key]: null }));
+                              setActiveSlot(slot.key);
+                            }}
+                            className="p-1 hover:bg-slate-800 text-slate-500 hover:text-amber-400 rounded transition-colors shrink-0"
+                            title="Retake"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        /* Empty slot — show capture button */
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveSlot(slot.key);
+                            handleCapturePhoto(slot.key);
+                          }}
+                          disabled={cameraStatus !== 'active' || isRecording}
+                          className={`w-full flex items-center gap-3 p-2.5 text-left transition-all rounded-xl disabled:opacity-40 ${
+                            isActive ? 'cursor-pointer' : 'cursor-pointer hover:bg-slate-700/20'
+                          }`}
+                        >
+                          <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 border ${
+                            isActive ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-400' : 'bg-slate-800/80 border-white/5 text-slate-500'
+                          }`}>
+                            <SlotIcon className="w-4 h-4" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className={`text-[11px] font-bold truncate ${isActive ? 'text-indigo-300' : 'text-slate-400'}`}>
+                              {isActive ? '📸 ' : ''}{slot.label}
+                            </p>
+                            <p className="text-[10px] text-slate-600 truncate">{slot.description}</p>
+                          </div>
+                          {isActive && (
+                            <Camera className="w-4 h-4 text-indigo-400 animate-pulse shrink-0" />
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Extra Photos (optional) */}
             <div className="space-y-2">
               <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex justify-between">
-                <span>Snapped Photos</span>
+                <span>Extra Photos</span>
                 <span className="text-slate-300 font-semibold font-mono">{localPhotos.length}</span>
               </label>
 
               {localPhotos.length === 0 ? (
-                <div className="py-6 bg-dark-900/60 border border-dashed border-slate-700/60 rounded-xl flex flex-col items-center justify-center text-slate-600 text-[11px] gap-1">
-                  <ImageIcon className="w-5 h-5 text-slate-700" />
-                  <span>No photos captured yet</span>
+                <div className="py-4 bg-dark-900/60 border border-dashed border-slate-700/60 rounded-xl flex flex-col items-center justify-center text-slate-600 text-[11px] gap-1">
+                  <ImageIcon className="w-4 h-4 text-slate-700" />
+                  <span>Optional additional photos</span>
                 </div>
               ) : (
-                <div className="grid grid-cols-3 gap-2.5 max-h-[160px] overflow-y-auto p-1 bg-dark-900/30 rounded-xl border border-white/5">
+                <div className="grid grid-cols-3 gap-2 max-h-[100px] overflow-y-auto p-1 bg-dark-900/30 rounded-xl border border-white/5">
                   {localPhotos.map((photo, i) => (
                     <div key={i} className="relative aspect-square rounded-lg overflow-hidden border border-white/10 group">
                       <img src={photo} className="w-full h-full object-cover" alt="" />
@@ -741,12 +860,15 @@ export default function ReturnStation({ active }) {
 
             {/* Video status */}
             <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Video Stream</label>
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
+                <span>Unboxing Video</span>
+                {!videoBlob && <span className="text-amber-400 text-[10px] font-bold">Required</span>}
+              </label>
               
               {videoBlob ? (
-                <div className="p-3 bg-dark-900/60 border border-indigo-500/20 rounded-xl flex items-center justify-between text-xs">
-                  <span className="flex items-center gap-2 text-indigo-300 font-semibold font-mono">
-                    <Video className="w-4 h-4 text-indigo-400" />
+                <div className="p-3 bg-dark-900/60 border border-emerald-500/20 rounded-xl flex items-center justify-between text-xs">
+                  <span className="flex items-center gap-2 text-emerald-300 font-semibold font-mono">
+                    <Video className="w-4 h-4 text-emerald-400" />
                     video_recorded.webm ({duration}s)
                   </span>
                   <button
@@ -759,10 +881,29 @@ export default function ReturnStation({ active }) {
               ) : (
                 <div className="py-3 bg-dark-900/40 border border-dashed border-slate-700/60 rounded-xl flex items-center justify-center text-slate-600 text-[11px] gap-2">
                   <Video className="w-4 h-4 text-slate-700" />
-                  <span>No video stream captured</span>
+                  <span>Record unboxing video above</span>
                 </div>
               )}
             </div>
+
+            {/* Completeness indicator */}
+            {(() => {
+              const filledSlots = Object.values(categorizedPhotos).filter(Boolean).length;
+              const allMandatoryDone = filledSlots === 4 && !!videoBlob;
+              return (
+                <div className={`flex items-center gap-2 px-3 py-2 rounded-xl text-[11px] font-semibold ${
+                  allMandatoryDone
+                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                    : 'bg-amber-500/10 text-amber-500 border border-amber-500/20'
+                }`}>
+                  {allMandatoryDone ? (
+                    <><ShieldCheck className="w-4 h-4 shrink-0" /> All evidence captured — ready to submit</>
+                  ) : (
+                    <><Lock className="w-4 h-4 shrink-0" /> {4 - filledSlots} photo{4 - filledSlots !== 1 ? 's' : ''} + {!videoBlob ? 'video ' : ''}required</>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Submit / Save Returns actions */}
             <div className="grid grid-cols-2 gap-3.5 pt-3 border-t border-white/5">
@@ -774,18 +915,29 @@ export default function ReturnStation({ active }) {
                 Discard
               </button>
               
-              <button
-                type="button"
-                onClick={() => handleSubmitReturn()}
-                disabled={localPhotos.length === 0 && !videoBlob}
-                className="py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-800 disabled:text-slate-500 disabled:border-slate-850 text-white rounded-xl text-xs font-bold uppercase transition-all flex items-center justify-center gap-1.5"
-              >
-                Submit Return
-              </button>
+              {(() => {
+                const allMandatoryDone = Object.values(categorizedPhotos).filter(Boolean).length === 4 && !!videoBlob;
+                return (
+                  <button
+                    type="button"
+                    onClick={() => handleSubmitReturn()}
+                    disabled={!allMandatoryDone}
+                    title={!allMandatoryDone ? 'Capture all 4 mandatory photos + video first' : ''}
+                    className={`py-2.5 rounded-xl text-xs font-bold uppercase transition-all flex items-center justify-center gap-1.5 ${
+                      allMandatoryDone
+                        ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                        : 'bg-slate-800 text-slate-500 border border-slate-700/60 cursor-not-allowed'
+                    }`}
+                  >
+                    {allMandatoryDone ? 'Submit Return' : <><Lock className="w-3.5 h-3.5" /> Locked</>}
+                  </button>
+                );
+              })()}
             </div>
 
           </div>
         )}
+
 
         {/* History Activities */}
         <div className="glass-panel rounded-2xl border border-white/10 overflow-hidden shadow-2xl flex flex-col">

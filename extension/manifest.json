@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "VRM Companion — Snapdeal Dispute Agent",
+  "version": "1.0.0",
+  "description": "Automates verified dispute filing on Snapdeal Seller Portal, linked to VRM return inspection evidence.",
+  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "host_permissions": ["https://seller.snapdeal.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://seller.snapdeal.com/*"],
+      "js": ["content_script.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "VRM Companion"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
